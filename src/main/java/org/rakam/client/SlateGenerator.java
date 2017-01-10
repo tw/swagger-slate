@@ -17,10 +17,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.Charset;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 import static org.apache.commons.lang3.StringUtils.isNotEmpty;
 
@@ -54,6 +51,9 @@ public class SlateGenerator {
         @Option(name = {"--model-package"}, title = "model package", description = CodegenConstants.MODEL_PACKAGE_DESC)
         private String modelPackage;
 
+        @Option(name = {"-t", "--tags"}, title = "tags", description = "Generate documentation for only the specified tags")
+        private String tags;
+
         @Option(name = {"-l", "--languages"}, title = "language", required = true,
                 description = "client languages separetd by comma to generate (maybe class name in classpath, required)")
         private String langs;
@@ -68,6 +68,7 @@ public class SlateGenerator {
 
         @Override
         public void run() {
+            Map<String, Object> configuration = new HashMap<>();
 
             ImmutableList.Builder<CodegenConfigurator> builder = ImmutableList.builder();
             List<String> langList = ImmutableList.copyOf(Splitter.on(",").trimResults().split(langs));
@@ -107,12 +108,17 @@ public class SlateGenerator {
                 if (isNotEmpty(modelPackage)) {
                     configurator.setModelPackage(modelPackage);
                 }
+
+                if (isNotEmpty(tags)) {
+                    configuration.put("tags", Arrays.asList(tags.split(",")));
+                }
+
                 setSystemProperties(configurator);
                 builder.add(configurator);
             }
 
             try {
-                MarkdownBuilder build = new SlateDocumentGenerator(builder.build()).build();
+                MarkdownBuilder build = new SlateDocumentGenerator(configuration, builder.build()).build();
                 File dir = new File(output);
                 if (!dir.exists()) {
                     dir.mkdirs();

@@ -3,7 +3,6 @@ package org.rakam.client.builder.document;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
-import com.google.common.base.CaseFormat;
 import com.google.common.base.Throwables;
 import com.google.common.collect.*;
 import com.google.common.io.Resources;
@@ -31,6 +30,7 @@ import java.io.IOException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 import static com.google.common.collect.Lists.newArrayList;
@@ -58,8 +58,11 @@ public class SlateDocumentGenerator
 
     private Map<OperationIdentifier, Map<String, String>> templates;
 
-    public SlateDocumentGenerator(ImmutableList<CodegenConfigurator> configurators)
+    private final Map<String, Object> configuration;
+
+    public SlateDocumentGenerator(Map<String, Object> configuration, ImmutableList<CodegenConfigurator> configurators)
     {
+        this.configuration = configuration;
         this.configurators = configurators;
         markdownBuilder = new MarkdownBuilder();
         definitions = new HashSet<>();
@@ -152,19 +155,46 @@ public class SlateDocumentGenerator
             markdownBuilder.newLine();
         }
 
-        if (!swagger.getTags().isEmpty()) {
-            for (Tag tag : swagger.getTags()) {
-                String name = tag.getName();
-                String description = tag.getDescription();
-                markdownBuilder.documentTitle(CaseFormat.UPPER_UNDERSCORE.to(CaseFormat.UPPER_CAMEL, name.replaceAll("-", " "))).newLine().textLine(description).newLine();
-                processOperation(name);
+        AtomicReference<String> previousTitle = new AtomicReference<>();
+        swagger.getPaths().forEach((path, model) -> {
+            String title = path.split("/")[1]; // TODO: this could be waaay better.
+
+            List<Map.Entry<HttpMethod, Operation>> operations = model.getOperationMap().entrySet()
+                    .stream()
+                    .filter(entry -> canProcessOperation(path, entry.getKey().name(), entry.getValue()))
+                    .collect(Collectors.toList());
+
+            if (operations.isEmpty()) { // no operations we can process here.
+                return;
             }
+
+            if (previousTitle.get() == null || !title.equals(previousTitle.get())) {
+                markdownBuilder
+                        .documentTitle(title.substring(0, 1).toUpperCase() + title.substring(1))
+                        .newLine();
+            }
+
+            operations.forEach(entry -> processOperation(path, entry.getKey().name(), entry.getValue()));
+
             markdownBuilder.newLine();
-        }
+
+            previousTitle.set(title);
+        });
     }
 
-    private void processOperation(String path, String method, Operation operation)
-    {
+    private boolean canProcessOperation(String path, String method, Operation operation) {
+        if (configuration.containsKey("tags")) {
+            List<String> tags = (List<String>) configuration.get("tags");
+
+            if (!tags.stream().anyMatch(s -> operation.getTags().contains(s))) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private void processOperation(String path, String method, Operation operation) {
         try {
             markdownBuilder.sectionTitleLevel1(operation.getSummary());
 
@@ -178,8 +208,8 @@ public class SlateDocumentGenerator
                 }
             }
 
-            builder.append(" -X "+method);
-            if(operation.getParameters().stream().anyMatch(p -> p instanceof FormParameter || p instanceof BodyParameter)) {
+            builder.append(" -X " + method);
+            if (operation.getParameters().stream().anyMatch(p -> p instanceof FormParameter || p instanceof BodyParameter)) {
                 builder.append(" -d @- << EOF \n" + toExampleJsonParameters(operation) + "\nEOF");
             }
 
@@ -197,8 +227,7 @@ public class SlateDocumentGenerator
                 Object example = response.getSchema().getExample();
                 if (example != null) {
                     markdownBuilder.source(example.toString(), "json");
-                }
-                else {
+                } else {
                     String value = getValue(response.getSchema());
                     String prettyJson = mapper.writerWithDefaultPrettyPrinter()
                             .writeValueAsString(mapper.readValue(value, Object.class));
@@ -233,8 +262,7 @@ public class SlateDocumentGenerator
             if (!description.isEmpty()) {
                 markdownBuilder.paragraph(description);
             }
-        }
-        catch (Exception e) {
+        } catch (Exception e) {
             LOGGER.error(format("An error occurred while processing operation. %s %s. Skipping..",
                     method.toUpperCase(Locale.ENGLISH), path), e);
         }
@@ -572,30 +600,4 @@ public class SlateDocumentGenerator
         }
     }
 
-    private void processOperation(String tag)
-    {
-
-        for (Map.Entry<String, Path> entry : swagger.getPaths().entrySet()) {
-
-            Path value = entry.getValue();
-            if (value.getGet() != null && value.getGet().getTags().contains(tag)) {
-                processOperation(entry.getKey(), "GET", value.getGet());
-            }
-            if (value.getPut() != null && value.getPut().getTags().contains(tag)) {
-                processOperation(entry.getKey(), "PUT", value.getPut());
-            }
-            if (value.getPost() != null && value.getPost().getTags().contains(tag)) {
-                processOperation(entry.getKey(), "POST", value.getPost());
-            }
-            if (value.getDelete() != null && value.getDelete().getTags().contains(tag)) {
-                processOperation(entry.getKey(), "DELETE", value.getDelete());
-            }
-            if (value.getPatch() != null && value.getPatch().getTags().contains(tag)) {
-                processOperation(entry.getKey(), "PATH", value.getPatch());
-            }
-            if (value.getOptions() != null && value.getOptions().getTags().contains(tag)) {
-                processOperation(entry.getKey(), "OPTIONS", value.getOptions());
-            }
-        }
-    }
 }
